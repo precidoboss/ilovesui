@@ -1,6 +1,7 @@
 import { COMMUNITY, type Favorite } from "./favorites";
 
 export type Phase = "title" | "play" | "paused" | "over";
+export type PowerKind = "aurora" | "cold";
 
 export type Shard = {
   id: number;
@@ -9,8 +10,9 @@ export type Shard = {
   vy: number;
   sway: number;
   phase: number;
-  kind: "fav" | "hazard" | "gold";
+  kind: "fav" | "hazard" | "gold" | "power";
   favId: string | null;
+  power: PowerKind | null;
   alive: boolean;
 };
 
@@ -45,6 +47,7 @@ export type Sim = {
   squash: number;
   score: number;
   combo: number;
+  comboTimer: number;
   lives: number;
   elapsed: number;
   spawn: number;
@@ -66,9 +69,22 @@ export type Sim = {
   revision: number;
   streak: number;
   bestCombo: number;
+  dashT: number;
+  dashCd: number;
+  auroraT: number;
+  coldT: number;
+  powersTaken: number;
 };
 
 const LIVES = 3;
+const MAX_COMBO = 8;
+// Seconds you can go without a catch before the chain drops one step.
+const COMBO_WINDOW = 2.2;
+const DASH_TIME = 0.22;
+const DASH_COOLDOWN = 1.5;
+const DASH_BOOST = 2.6;
+const AURORA_TIME = 8;
+const COLD_TIME = 5;
 
 export function createSim(reduced: boolean): Sim {
   const flakes: Flake[] = [];
@@ -91,6 +107,7 @@ export function createSim(reduced: boolean): Sim {
     squash: 1,
     score: 0,
     combo: 0,
+    comboTimer: 0,
     lives: LIVES,
     elapsed: 0,
     spawn: 0.4,
@@ -112,6 +129,11 @@ export function createSim(reduced: boolean): Sim {
     revision: 0,
     streak: 0,
     bestCombo: 0,
+    dashT: 0,
+    dashCd: 0,
+    auroraT: 0,
+    coldT: 0,
+    powersTaken: 0,
   };
 }
 
@@ -146,6 +168,7 @@ export function startRun(sim: Sim, extraIds: string[]) {
   sim.phase = "play";
   sim.score = 0;
   sim.combo = 0;
+  sim.comboTimer = 0;
   sim.lives = LIVES;
   sim.elapsed = 0;
   sim.spawn = 0.35;
@@ -158,10 +181,35 @@ export function startRun(sim: Sim, extraIds: string[]) {
   sim.lastFavId = null;
   sim.streak = 0;
   sim.bestCombo = 0;
+  sim.dashT = 0;
+  sim.dashCd = 0;
+  sim.auroraT = 0;
+  sim.coldT = 0;
+  sim.powersTaken = 0;
   sim.x = sim.w * 0.5;
   sim.bag = shuffle([...COMMUNITY.map((f) => f.id), ...extraIds]);
   sim.bagAt = 0;
   sim.revision++;
+}
+
+/** Burst of speed in the current facing direction. Ignored while cooling down. */
+export function dash(sim: Sim) {
+  if (sim.phase !== "play" || sim.dashCd > 0) return;
+  sim.dashT = DASH_TIME;
+  sim.dashCd = DASH_COOLDOWN;
+  sim.targetX = null;
+  sim.squash = 0.9;
+  for (let i = 0; i < 6; i++) {
+    sim.bits.push({
+      x: sim.x - sim.facing * 30,
+      y: sim.h - 120 + Math.random() * 90,
+      vx: -sim.facing * (120 + Math.random() * 120),
+      vy: -30 - Math.random() * 60,
+      life: 0.35 + Math.random() * 0.2,
+      max: 0.55,
+      gold: false,
+    });
+  }
 }
 
 export function step(sim: Sim, dt: number) {
@@ -192,10 +240,26 @@ export function step(sim: Sim, dt: number) {
   }
 
   sim.elapsed += capped;
-  const speed = 560;
+
+  // Timers: power-ups, dash and the decaying combo chain.
+  sim.dashT = Math.max(0, sim.dashT - capped);
+  sim.dashCd = Math.max(0, sim.dashCd - capped);
+  sim.auroraT = Math.max(0, sim.auroraT - capped);
+  sim.coldT = Math.max(0, sim.coldT - capped);
+  if (sim.combo > 0) {
+    sim.comboTimer -= capped;
+    if (sim.comboTimer <= 0) {
+      sim.combo -= 1;
+      sim.comboTimer = sim.combo > 0 ? COMBO_WINDOW : 0;
+      sim.revision++;
+    }
+  }
+
+  const speed = 560 * (sim.dashT > 0 ? DASH_BOOST : 1);
   let dir = 0;
   if (sim.inputLeft) dir -= 1;
   if (sim.inputRight) dir += 1;
+  if (sim.dashT > 0 && dir === 0) dir = sim.facing;
   if (dir !== 0) {
     sim.x += dir * speed * capped;
     sim.facing = dir < 0 ? -1 : 1;
@@ -227,11 +291,12 @@ export function step(sim: Sim, dt: number) {
   const ground = sim.h - 108;
   const catchTop = ground - 150;
   const half = 110;
+  const fall = sim.coldT > 0 ? 0.5 : 1;
 
   for (const shard of sim.shards) {
     if (!shard.alive) continue;
     shard.phase += capped;
-    shard.y += shard.vy * capped;
+    shard.y += shard.vy * fall * capped;
     shard.x += Math.sin(shard.phase * shard.sway) * 18 * capped;
     if (shard.y > catchTop && shard.y < ground && Math.abs(shard.x - sim.x) < half) {
       resolveCatch(sim, shard);
@@ -240,6 +305,7 @@ export function step(sim: Sim, dt: number) {
     if (shard.y > sim.h + 50) {
       if (shard.kind === "fav" && shard.alive) {
         sim.combo = 0;
+        sim.comboTimer = 0;
         sim.streak = 0;
       }
       shard.alive = false;
@@ -262,12 +328,12 @@ function spawnShard(sim: Sim) {
   const roll = Math.random();
   const hazardChance = sim.elapsed > 6 ? Math.min(0.34, 0.12 + sim.elapsed * 0.004) : 0;
   const goldChance = sim.elapsed > 10 ? 0.08 : 0;
-  const kind: Shard["kind"] =
-    roll < hazardChance
-      ? "hazard"
-      : roll < hazardChance + goldChance
-        ? "gold"
-        : "fav";
+  const powerChance = sim.elapsed > 4 ? 0.07 : 0;
+  let kind: Shard["kind"];
+  if (roll < hazardChance) kind = "hazard";
+  else if (roll < hazardChance + goldChance) kind = "gold";
+  else if (roll < hazardChance + goldChance + powerChance) kind = "power";
+  else kind = "fav";
   const favId =
     kind === "fav" ? sim.bag[sim.bagAt % Math.max(sim.bag.length, 1)] ?? null : null;
   if (kind === "fav") sim.bagAt++;
@@ -280,6 +346,7 @@ function spawnShard(sim: Sim) {
     phase: Math.random() * 6,
     kind,
     favId,
+    power: kind === "power" ? (Math.random() < 0.5 ? "aurora" : "cold") : null,
     alive: true,
   };
   sim.shards.push(shard);
@@ -290,6 +357,7 @@ function resolveCatch(sim: Sim, shard: Shard) {
   if (shard.kind === "hazard") {
     sim.lives -= 1;
     sim.combo = 0;
+    sim.comboTimer = 0;
     sim.streak = 0;
     sim.hitstop = sim.reduced ? 0 : 0.09;
     sim.trauma = Math.min(1, sim.trauma + 0.55);
@@ -303,11 +371,30 @@ function resolveCatch(sim: Sim, shard: Shard) {
     return;
   }
 
+  if (shard.kind === "power") {
+    sim.powersTaken++;
+    sim.hitstop = sim.reduced ? 0 : 0.05;
+    sim.squash = 1.15;
+    burst(sim, shard.x, shard.y, true);
+    if (shard.power === "aurora") {
+      sim.auroraT = AURORA_TIME;
+      sim.floaters.push({ x: shard.x, y: shard.y - 24, text: "Aurora ×2", life: 1.2, gold: true });
+    } else {
+      sim.coldT = COLD_TIME;
+      sim.floaters.push({ x: shard.x, y: shard.y - 24, text: "Cold snap", life: 1.2, gold: false });
+    }
+    sim.revision++;
+    return;
+  }
+
+  const mult = sim.auroraT > 0 ? 2 : 1;
+
   if (shard.kind === "gold") {
     // Golden thaw: a rare crystal that jumps the multiplier and restores a life.
-    sim.combo = Math.min(8, sim.combo + 2);
+    sim.combo = Math.min(MAX_COMBO, sim.combo + 2);
+    sim.comboTimer = COMBO_WINDOW;
     sim.bestCombo = Math.max(sim.bestCombo, sim.combo);
-    const gain = 500 * Math.max(1, sim.combo);
+    const gain = 500 * Math.max(1, sim.combo) * mult;
     sim.score += gain;
     sim.hitstop = sim.reduced ? 0 : 0.07;
     sim.trauma = Math.min(1, sim.trauma + 0.35);
@@ -322,10 +409,11 @@ function resolveCatch(sim: Sim, shard: Shard) {
     return;
   }
 
-  sim.combo = Math.min(8, sim.combo + 1);
+  sim.combo = Math.min(MAX_COMBO, sim.combo + 1);
+  sim.comboTimer = COMBO_WINDOW;
   sim.streak += 1;
   sim.bestCombo = Math.max(sim.bestCombo, sim.combo);
-  const gain = 100 * sim.combo;
+  const gain = 100 * sim.combo * mult;
   sim.score += gain;
   sim.hitstop = sim.reduced ? 0 : 0.045;
   sim.trauma = Math.min(1, sim.trauma + 0.22);
@@ -342,10 +430,14 @@ function resolveCatch(sim: Sim, shard: Shard) {
     life: 0.85,
     gold: true,
   });
+  // Every 5 clean catches in a row announces the streak.
+  if (sim.streak % 5 === 0) {
+    sim.floaters.push({ x: shard.x, y: shard.y - 50, text: `${sim.streak} clean`, life: 1.1, gold: false });
+  }
   // Every 10 clean catches in a row restores one life, up to the cap.
   if (sim.streak % 10 === 0 && sim.lives < LIVES) {
     sim.lives += 1;
-    sim.floaters.push({ x: shard.x, y: shard.y - 50, text: "+1 life", life: 1.1, gold: false });
+    sim.floaters.push({ x: shard.x, y: shard.y - 74, text: "+1 life", life: 1.1, gold: false });
   }
   sim.revision++;
 }

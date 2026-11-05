@@ -68,3 +68,36 @@
     animation: none;
   }
 }
+
+/* Home page */
+.aurora-bg {
+  background:
+    radial-gradient(60% 50% at 80% 10%, rgba(122, 215, 240, 0.22), transparent 70%),
+    radial-gradient(50% 45% at 10% 0%, rgba(228, 184, 106, 0.14), transparent 70%),
+    radial-gradient(70% 60% at 50% 100%, rgba(29, 109, 132, 0.25), transparent 70%);
+}
+
+@keyframes crystal-fall {
+  0% {
+    transform: translateY(-20%) rotate(-6deg);
+    opacity: 0;
+  }
+  12% {
+    opacity: 0.95;
+  }
+  100% {
+    transform: translateY(420%) rotate(8deg);
+    opacity: 0.6;
+  }
+}
+
+.crystal-fall {
+  animation: crystal-fall 6.5s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .crystal-fall {
+    animation: none;
+    opacity: 0.8;
+  }
+}

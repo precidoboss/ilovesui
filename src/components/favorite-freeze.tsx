@@ -3,7 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { Pause, Play, Snowflake, Volume2, VolumeX } from "lucide-react";
 import { COMMUNITY, loadSave, writeSave, type Favorite, type Side } from "@/game/favorites";
 import { drawFrame, type Sheets } from "@/game/draw";
-import { createSim, lookup, resizeSim, retuneBag, startRun, step, type Sim } from "@/game/sim";
+import { createSim, dash, lookup, resizeSim, retuneBag, startRun, step, type Sim } from "@/game/sim";
 import { isMuted, playCatch, playHazard, playStart, resumeIfNeeded, setMuted, unlockAudio } from "@/game/audio";
 import { addFavorite, getFavorites, getLeaderboard, submitScore, type LeaderRow } from "@/lib/game-data";
 
@@ -164,6 +164,8 @@ export function FavoriteFreeze() {
       } else if (down && (event.code === "Space" || event.code === "Enter") && sim.phase !== "play") {
         event.preventDefault();
         begin();
+      } else if (down && (event.code === "ShiftLeft" || event.code === "ShiftRight") && sim.phase === "play") {
+        dash(sim);
       } else if (down && event.code === "KeyP" && (sim.phase === "play" || sim.phase === "paused")) {
         togglePause();
       }
@@ -208,6 +210,11 @@ export function FavoriteFreeze() {
     sim.targetX = event.clientX - rect.left;
     sim.inputLeft = false;
     sim.inputRight = false;
+  }
+
+  function dashNow() {
+    const sim = simRef.current;
+    if (sim) dash(sim);
   }
 
   function hold(dir: "left" | "right", down: boolean) {
@@ -357,6 +364,9 @@ export function FavoriteFreeze() {
               <p className="mt-2 hidden text-sm leading-relaxed text-muted md:block">
                 Glowing crystals are favorite things about Sui and Lofi. Gray frost costs a life.
               </p>
+              <p className="mt-2 hidden text-xs tracking-wide text-muted uppercase md:block">
+                A / D to slide · Shift to dash · P to pause
+              </p>
               <div className="mt-3 flex flex-wrap gap-2">
                 <button
                   type="button"
@@ -453,6 +463,14 @@ export function FavoriteFreeze() {
               onPointerLeave={() => hold("left", false)}
             >
               A
+            </button>
+            <button
+              type="button"
+              onPointerDown={dashNow}
+              className="h-14 rounded-full bg-ice px-4 text-sm font-medium text-bg-deep"
+              aria-label="Dash"
+            >
+              Dash
             </button>
             <button
               type="button"
