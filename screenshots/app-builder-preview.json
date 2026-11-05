@@ -1,0 +1,36 @@
+{
+  "url": "http://127.0.0.1:8080/",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "status": 200,
+      "title": "Favorite Freeze",
+      "hasCanvas": true,
+      "bodyTextLen": 1692,
+      "bodyTextHash": "aaac2a5e7dca3a2287ca37bec7dd6767ff13055ad5621f9401eb23896f06d4f0",
+      "bodyTextPrefix": "Favorite Freeze Sui & Lofi, caught in the ice GLACIER ARCADE Cat",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-preview.png"
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "status": 200,
+      "title": "Favorite Freeze",
+      "hasCanvas": true,
+      "bodyTextLen": 100,
+      "bodyTextHash": "784d1b54da7539dc9657689097fdbe9a941696b5809530d23e82bf0fbe57a2b4",
+      "bodyTextPrefix": "Favorite Freeze Sui & Lofi, caught in the ice GLACIER ARCADE Cat",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-preview-mobile.png"
+    }
+  },
+  "brandWarnings": [],
+  "authWarnings": [],
+  "verdictFile": "/workspace/screenshots/app-builder-preview.json"
+}
