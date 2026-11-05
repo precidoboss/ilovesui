@@ -9,7 +9,7 @@ export type Shard = {
   vy: number;
   sway: number;
   phase: number;
-  kind: "fav" | "hazard";
+  kind: "fav" | "hazard" | "gold";
   favId: string | null;
   alive: boolean;
 };
@@ -64,6 +64,8 @@ export type Sim = {
   reduced: boolean;
   lastFavId: string | null;
   revision: number;
+  streak: number;
+  bestCombo: number;
 };
 
 const LIVES = 3;
@@ -108,6 +110,8 @@ export function createSim(reduced: boolean): Sim {
     reduced,
     lastFavId: null,
     revision: 0,
+    streak: 0,
+    bestCombo: 0,
   };
 }
 
@@ -152,6 +156,8 @@ export function startRun(sim: Sim, extraIds: string[]) {
   sim.trauma = 0;
   sim.thawedRun = [];
   sim.lastFavId = null;
+  sim.streak = 0;
+  sim.bestCombo = 0;
   sim.x = sim.w * 0.5;
   sim.bag = shuffle([...COMMUNITY.map((f) => f.id), ...extraIds]);
   sim.bagAt = 0;
@@ -232,7 +238,10 @@ export function step(sim: Sim, dt: number) {
       continue;
     }
     if (shard.y > sim.h + 50) {
-      if (shard.kind === "fav" && shard.alive) sim.combo = 0;
+      if (shard.kind === "fav" && shard.alive) {
+        sim.combo = 0;
+        sim.streak = 0;
+      }
       shard.alive = false;
     }
   }
@@ -250,9 +259,18 @@ export function step(sim: Sim, dt: number) {
 }
 
 function spawnShard(sim: Sim) {
-  const hard = sim.elapsed > 6 && Math.random() < Math.min(0.34, 0.12 + sim.elapsed * 0.004);
-  const favId = hard ? null : sim.bag[sim.bagAt % Math.max(sim.bag.length, 1)] ?? null;
-  if (!hard) sim.bagAt++;
+  const roll = Math.random();
+  const hazardChance = sim.elapsed > 6 ? Math.min(0.34, 0.12 + sim.elapsed * 0.004) : 0;
+  const goldChance = sim.elapsed > 10 ? 0.08 : 0;
+  const kind: Shard["kind"] =
+    roll < hazardChance
+      ? "hazard"
+      : roll < hazardChance + goldChance
+        ? "gold"
+        : "fav";
+  const favId =
+    kind === "fav" ? sim.bag[sim.bagAt % Math.max(sim.bag.length, 1)] ?? null : null;
+  if (kind === "fav") sim.bagAt++;
   const shard: Shard = {
     id: sim.nextId++,
     x: 70 + Math.random() * Math.max(40, sim.w - 140),
@@ -260,7 +278,7 @@ function spawnShard(sim: Sim) {
     vy: Math.min(460, 240 + sim.elapsed * 7),
     sway: 1.2 + Math.random() * 2.2,
     phase: Math.random() * 6,
-    kind: hard ? "hazard" : "fav",
+    kind,
     favId,
     alive: true,
   };
@@ -272,6 +290,7 @@ function resolveCatch(sim: Sim, shard: Shard) {
   if (shard.kind === "hazard") {
     sim.lives -= 1;
     sim.combo = 0;
+    sim.streak = 0;
     sim.hitstop = sim.reduced ? 0 : 0.09;
     sim.trauma = Math.min(1, sim.trauma + 0.55);
     sim.squash = 0.82;
@@ -283,7 +302,29 @@ function resolveCatch(sim: Sim, shard: Shard) {
     sim.revision++;
     return;
   }
+
+  if (shard.kind === "gold") {
+    // Golden thaw: a rare crystal that jumps the multiplier and restores a life.
+    sim.combo = Math.min(8, sim.combo + 2);
+    sim.bestCombo = Math.max(sim.bestCombo, sim.combo);
+    const gain = 500 * Math.max(1, sim.combo);
+    sim.score += gain;
+    sim.hitstop = sim.reduced ? 0 : 0.07;
+    sim.trauma = Math.min(1, sim.trauma + 0.35);
+    sim.squash = 1.2;
+    burst(sim, shard.x, shard.y, true);
+    sim.floaters.push({ x: shard.x, y: shard.y - 24, text: `+${gain}`, life: 1.1, gold: true });
+    if (sim.lives < LIVES) {
+      sim.lives += 1;
+      sim.floaters.push({ x: shard.x, y: shard.y - 50, text: "+1 life", life: 1.1, gold: false });
+    }
+    sim.revision++;
+    return;
+  }
+
   sim.combo = Math.min(8, sim.combo + 1);
+  sim.streak += 1;
+  sim.bestCombo = Math.max(sim.bestCombo, sim.combo);
   const gain = 100 * sim.combo;
   sim.score += gain;
   sim.hitstop = sim.reduced ? 0 : 0.045;
@@ -301,6 +342,11 @@ function resolveCatch(sim: Sim, shard: Shard) {
     life: 0.85,
     gold: true,
   });
+  // Every 10 clean catches in a row restores one life, up to the cap.
+  if (sim.streak % 10 === 0 && sim.lives < LIVES) {
+    sim.lives += 1;
+    sim.floaters.push({ x: shard.x, y: shard.y - 50, text: "+1 life", life: 1.1, gold: false });
+  }
   sim.revision++;
 }
 

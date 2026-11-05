@@ -145,9 +145,18 @@ function drawShard(
 ) {
   const sheet = shard.kind === "hazard" ? sheets.hazard : sheets.crystal;
   const frame = sheet[Math.floor(shard.phase * 6) % 4];
-  const size = shard.kind === "hazard" ? 72 : 78;
+  const size = shard.kind === "hazard" ? 72 : shard.kind === "gold" ? 88 : 78;
   ctx.save();
   ctx.translate(shard.x, shard.y);
+  if (shard.kind === "gold") {
+    const glow = ctx.createRadialGradient(0, 0, 4, 0, 0, size * 0.75);
+    glow.addColorStop(0, "rgba(228, 184, 106, 0.55)");
+    glow.addColorStop(1, "rgba(228, 184, 106, 0)");
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(0, 0, size * 0.75, 0, Math.PI * 2);
+    ctx.fill();
+  }
   if (frame && frame.complete && frame.naturalWidth > 0) {
     ctx.drawImage(frame, -size / 2, -size / 2, size, size);
   } else {
@@ -174,6 +183,18 @@ function drawShard(
       ctx.textBaseline = "middle";
       ctx.fillText(label, 0, 45);
     }
+  }
+  if (shard.kind === "gold") {
+    ctx.font = "640 12px Outfit, sans-serif";
+    const label = "golden thaw";
+    const width = ctx.measureText(label).width + 18;
+    ctx.fillStyle = "rgba(6, 20, 28, 0.78)";
+    roundRect(ctx, -width / 2, 34, width, 22, 11);
+    ctx.fill();
+    ctx.fillStyle = GOLD;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, 0, 45);
   }
   ctx.restore();
 }

@@ -1,9 +1,13 @@
-import { useEffect, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type PointerEvent } from "react";
+import { Link } from "@tanstack/react-router";
 import { Pause, Play, Snowflake, Volume2, VolumeX } from "lucide-react";
-import { COMMUNITY, loadSave, makeCustom, writeSave, type Favorite, type Side } from "@/game/favorites";
+import { COMMUNITY, loadSave, writeSave, type Favorite, type Side } from "@/game/favorites";
 import { drawFrame, type Sheets } from "@/game/draw";
 import { createSim, lookup, resizeSim, retuneBag, startRun, step, type Sim } from "@/game/sim";
 import { isMuted, playCatch, playHazard, playStart, resumeIfNeeded, setMuted, unlockAudio } from "@/game/audio";
+import { addFavorite, getFavorites, getLeaderboard, submitScore, type LeaderRow } from "@/lib/game-data";
+
+const HANDLE_KEY = "favorite-freeze.handle";
 
 function loadSheet(folder: string) {
   return [0, 1, 2, 3].map((i) => {
@@ -31,6 +35,13 @@ export function FavoriteFreeze() {
   const [draft, setDraft] = useState("");
   const [side, setSide] = useState<Side>("sui");
   const [ready, setReady] = useState(false);
+  const [freezing, setFreezing] = useState(false);
+  const [wallError, setWallError] = useState<string | null>(null);
+  const [board, setBoard] = useState<LeaderRow[]>([]);
+  const [handle, setHandle] = useState("");
+  const [posting, setPosting] = useState(false);
+  const [posted, setPosted] = useState(false);
+  const [postError, setPostError] = useState<string | null>(null);
 
   useEffect(() => {
     const save = loadSave();
@@ -38,6 +49,20 @@ export function FavoriteFreeze() {
     setCustom(save.custom);
     setThawed(save.thawed);
     setBest(save.best);
+    try {
+      setHandle(localStorage.getItem(HANDLE_KEY) ?? "");
+    } catch {
+      setHandle("");
+    }
+    getLeaderboard().then(setBoard).catch(() => setBoard([]));
+    getFavorites()
+      .then((rows) => {
+        customRef.current = rows;
+        setCustom(rows);
+        const liveSim = simRef.current;
+        if (liveSim) retuneBag(liveSim, rows.map((f) => f.id));
+      })
+      .catch(() => undefined);
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const sim = createSim(reduced);
     simRef.current = sim;
@@ -127,6 +152,9 @@ export function FavoriteFreeze() {
       const sim = simRef.current;
       if (!sim || event.repeat) return;
       const down = event.type === "keydown";
+      // Let text fields (handle, freeze box) receive their own keystrokes.
+      const target = event.target as HTMLElement | null;
+      if (down && target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
       if (event.code === "ArrowLeft" || event.code === "KeyA") {
         sim.inputLeft = down;
         if (down) event.preventDefault();
@@ -160,6 +188,8 @@ export function FavoriteFreeze() {
     setLives(3);
     setSpotlight(null);
     setWallOpen(false);
+    setPosted(false);
+    setPostError(null);
   }
 
   function togglePause() {
@@ -188,19 +218,48 @@ export function FavoriteFreeze() {
     if (down) sim.targetX = null;
   }
 
-  function freezeDraft() {
+  async function freezeDraft() {
     const text = draft.trim();
-    if (text.length < 8) return;
-    const fav = makeCustom(text, side);
-    const next = [fav, ...customRef.current].slice(0, 24);
-    customRef.current = next;
-    setCustom(next);
+    if (text.length < 8 || freezing) return;
+    setFreezing(true);
+    setWallError(null);
+    try {
+      const fav = await addFavorite({ data: { side, text } });
+      const next = [fav, ...customRef.current].slice(0, 200);
+      customRef.current = next;
+      setCustom(next);
+      const sim = simRef.current;
+      if (sim) retuneBag(sim, [fav.id]);
+      setDraft("");
+      setSpotlight(fav);
+    } catch (err) {
+      setWallError(err instanceof Error && err.message ? err.message : "Could not freeze that. Try again.");
+    } finally {
+      setFreezing(false);
+    }
+  }
+
+  async function postScore(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
     const sim = simRef.current;
-    if (sim) retuneBag(sim, [fav.id]);
-    const save = loadSave();
-    writeSave({ ...save, custom: next });
-    setDraft("");
-    setSpotlight(fav);
+    const name = handle.trim();
+    if (!sim || posting || posted) return;
+    setPosting(true);
+    setPostError(null);
+    try {
+      const rows = await submitScore({ data: { handle: name, score: sim.score, bestCombo: sim.bestCombo } });
+      setBoard(rows);
+      setPosted(true);
+      try {
+        localStorage.setItem(HANDLE_KEY, name);
+      } catch {
+        // Storage can be blocked; the score still posted.
+      }
+    } catch {
+      setPostError("Could not post. Use 1 to 16 letters, numbers, spaces, _ . or -, then try again.");
+    } finally {
+      setPosting(false);
+    }
   }
 
   function toggleMute() {
@@ -231,6 +290,12 @@ export function FavoriteFreeze() {
             <p className="mt-1 text-sm text-muted">Sui & Lofi, caught in the ice</p>
           </div>
           <div className="pointer-events-auto flex items-center gap-2">
+            <Link
+              to="/"
+              className="inline-flex h-11 items-center rounded-full border border-line bg-surface px-4 text-sm text-fg"
+            >
+              Home
+            </Link>
             <button
               type="button"
               onClick={toggleMute}
@@ -332,6 +397,30 @@ export function FavoriteFreeze() {
               <p className="text-xs tracking-wide text-gold uppercase">Run frozen</p>
               <h2 className="mt-1 text-4xl text-fg">{score}</h2>
               <p className="mt-1 text-sm text-muted">Best {best}. {thawed.length} favorites stamped on the wall.</p>
+              {posted ? (
+                <p className="mt-4 text-sm text-ice">Score posted to the leaderboard.</p>
+              ) : (
+                <form className="mt-4 flex flex-wrap items-center gap-2" onSubmit={postScore}>
+                  <label className="sr-only" htmlFor="handle">Handle</label>
+                  <input
+                    id="handle"
+                    value={handle}
+                    onChange={(event) => setHandle(event.target.value)}
+                    maxLength={16}
+                    placeholder="Your handle"
+                    className="h-11 min-w-0 flex-1 rounded-full border border-line bg-bg px-4 text-sm text-fg outline-none placeholder:text-muted"
+                  />
+                  <button
+                    type="submit"
+                    disabled={posting || handle.trim().length === 0}
+                    className="h-11 rounded-full bg-gold px-4 text-sm font-medium text-gold-ink disabled:opacity-40"
+                  >
+                    {posting ? "Posting…" : "Post score"}
+                  </button>
+                  {postError ? <p className="w-full text-xs text-gold">{postError}</p> : null}
+                </form>
+              )}
+              <Leaderboard rows={board} />
               <div className="mt-4 flex gap-3">
                 <button
                   type="button"
@@ -395,6 +484,8 @@ export function FavoriteFreeze() {
           onDraft={setDraft}
           onSide={setSide}
           onFreeze={freezeDraft}
+          freezing={freezing}
+          error={wallError}
         />
       </aside>
 
@@ -418,6 +509,8 @@ export function FavoriteFreeze() {
             onDraft={setDraft}
             onSide={setSide}
             onFreeze={freezeDraft}
+            freezing={freezing}
+            error={wallError}
           />
         </div>
       ) : null}
@@ -433,6 +526,8 @@ function IceWall({
   onDraft,
   onSide,
   onFreeze,
+  freezing,
+  error,
 }: {
   favorites: Favorite[];
   thawed: string[];
@@ -441,8 +536,12 @@ function IceWall({
   onDraft: (value: string) => void;
   onSide: (side: Side) => void;
   onFreeze: () => void;
+  freezing: boolean;
+  error: string | null;
 }) {
   const thawedSet = new Set(thawed);
+  const [filter, setFilter] = useState<"all" | Side>("all");
+  const shown = filter === "all" ? favorites : favorites.filter((fav) => fav.side === filter);
   return (
     <aside className="flex h-full min-h-0 flex-1 flex-col bg-bg-deep">
       <div className="border-b border-line px-5 py-4">
@@ -451,6 +550,20 @@ function IceWall({
         <p className="mt-1 text-sm text-muted">
           {thawedSet.size} thawed · {favorites.length} frozen in
         </p>
+        <div className="mt-3 flex gap-2" role="tablist" aria-label="Filter favorites">
+          {(["all", "sui", "lofi"] as const).map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              role="tab"
+              aria-selected={filter === tab}
+              onClick={() => setFilter(tab)}
+              className={`h-9 rounded-full px-3 text-xs uppercase tracking-wide ${filter === tab ? "bg-fg text-bg-deep" : "border border-line text-fg"}`}
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
       </div>
       <form
         className="border-b border-line px-5 py-4"
@@ -488,15 +601,16 @@ function IceWall({
           </button>
           <button
             type="submit"
-            disabled={draft.trim().length < 8}
+            disabled={freezing || draft.trim().length < 8}
             className="ml-auto h-10 rounded-full bg-fg px-4 text-sm text-bg-deep disabled:opacity-40"
           >
-            Freeze
+            {freezing ? "Freezing…" : "Freeze"}
           </button>
         </div>
+        {error ? <p className="mt-2 text-xs text-gold">{error}</p> : null}
       </form>
       <ul className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4">
-        {favorites.map((fav) => {
+        {shown.map((fav) => {
           const on = thawedSet.has(fav.id);
           return (
             <li
@@ -516,5 +630,33 @@ function IceWall({
         })}
       </ul>
     </aside>
+  );
+}
+
+export function Leaderboard({ rows }: { rows: LeaderRow[] }) {
+  if (rows.length === 0) {
+    return <p className="mt-4 text-sm text-muted">No scores yet. Be the first on the board.</p>;
+  }
+  return (
+    <div className="mt-4">
+      <p className="text-xs tracking-wide text-muted uppercase">Top 10</p>
+      <ol className="mt-2 space-y-1 text-sm">
+        {rows.map((row, index) => (
+          <li
+            key={`${row.handle}-${index}`}
+            className="flex items-center justify-between gap-3 rounded-xl border border-line bg-bg/60 px-3 py-1.5"
+          >
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="w-5 text-right tabular-nums text-muted">{index + 1}</span>
+              <span className="truncate text-fg">{row.handle}</span>
+            </span>
+            <span className="shrink-0 tabular-nums text-ice">
+              {row.score}
+              {row.best_combo > 1 ? <span className="ml-2 text-xs text-gold">×{row.best_combo}</span> : null}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </div>
   );
 }
